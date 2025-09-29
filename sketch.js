@@ -2,21 +2,92 @@ let video
 let prevFrame
 let currentFrame
 let motionGrid = []
+let revealedCells = [] // Para mantener registro de qué celdas han sido reveladas
+let gazaImage // Imagen que se revelará con el movimiento
 let gridCols = 2 // 2 columnas
 let gridRows = 3 // 3 filas
-let gridWidth = 270 // Ancho de la grilla
-let gridHeight = 480 // Alto de la grilla
-let cellWidth = gridWidth / gridCols // 135px por celda
-let cellHeight = gridHeight / gridRows // 160px por celda
-let gridOffsetX = (640 - gridWidth) / 2 // Centrar horizontalmente
-let gridOffsetY = (480 - gridHeight) / 2 // Centrar verticalmente (será 0)
+let gridWidth = 270 // Ancho de la grilla (será actualizado con las dimensiones de la imagen)
+let gridHeight = 480 // Alto de la grilla (será actualizado con las dimensiones de la imagen)
+let cellWidth = gridWidth / gridCols
+let cellHeight = gridHeight / gridRows
+let gridOffsetX = 0 // Será calculado para centrar
+let gridOffsetY = 0 // Será calculado para centrar
 let threshold = 30
 let overlayOpacity = 150
 let isVideoReady = false
+let imageLoaded = false
+let frameCount = 0 // Contador de frames para evitar detección temprana
+let minFramesBeforeDetection = 30 // Esperar 30 frames antes de empezar a detectar
 
 // Variables para controles
 let thresholdSlider, opacitySlider
 let thresholdDisplay, opacityDisplay
+
+function preload () {
+  // Cargar la imagen que se revelará
+  gazaImage = loadImage(
+    'gaza_2023.png',
+    () => {
+      console.log('Imagen cargada exitosamente')
+      console.log(
+        'Dimensiones originales:',
+        gazaImage.width,
+        'x',
+        gazaImage.height
+      )
+      console.log(
+        'Orientación:',
+        gazaImage.width > gazaImage.height
+          ? 'Horizontal (apaisada)'
+          : 'Vertical'
+      )
+
+      // Verificar si la imagen es muy pequeña
+      if (gazaImage.width < 200 || gazaImage.height < 200) {
+        console.warn(
+          '¡ADVERTENCIA! La imagen es muy pequeña:',
+          gazaImage.width,
+          'x',
+          gazaImage.height
+        )
+        console.log('Se recomienda una imagen de al menos 400x300 píxeles')
+      }
+
+      // Para imagen horizontal (apaisada), usar toda la imagen
+      // La grilla se ajustará a estas dimensiones
+      gridWidth = gazaImage.width
+      gridHeight = gazaImage.height
+      cellWidth = gridWidth / gridCols // Ancho de cada celda
+      cellHeight = gridHeight / gridRows // Alto de cada celda
+
+      // Centrar la grilla en el canvas
+      gridOffsetX = (640 - gridWidth) / 2
+      gridOffsetY = (480 - gridHeight) / 2
+
+      console.log('Grilla configurada:')
+      console.log('- Dimensiones totales:', gridWidth, 'x', gridHeight)
+      console.log(
+        '- Celdas individuales:',
+        cellWidth.toFixed(1),
+        'x',
+        cellHeight.toFixed(1)
+      )
+      console.log(
+        '- Offset (centrado):',
+        gridOffsetX.toFixed(1),
+        ',',
+        gridOffsetY.toFixed(1)
+      )
+      console.log('- Grilla:', gridCols, 'columnas x', gridRows, 'filas')
+
+      imageLoaded = true
+    },
+    err => {
+      console.error('Error cargando la imagen:', err)
+      console.log('Verificar que el archivo gaza_2023.png existe en la carpeta')
+    }
+  )
+}
 
 function setup () {
   // Crear canvas con densidad de píxeles consistente
@@ -47,15 +118,24 @@ function setup () {
 }
 
 function draw () {
-  if (!isVideoReady) {
+  if (!isVideoReady || !imageLoaded) {
     // Mostrar mensaje de carga
     background(50)
     fill(255)
     textAlign(CENTER, CENTER)
     textSize(20)
-    text('Iniciando cámara...', width / 2, height / 2)
+    if (!isVideoReady && !imageLoaded) {
+      text('Iniciando cámara e imagen...', width / 2, height / 2)
+    } else if (!isVideoReady) {
+      text('Iniciando cámara...', width / 2, height / 2)
+    } else {
+      text('Cargando imagen...', width / 2, height / 2)
+    }
     return
   }
+
+  // Incrementar contador de frames
+  frameCount++
 
   // Mostrar el video actual
   image(video, 0, 0, width, height)
@@ -63,10 +143,28 @@ function draw () {
   // Actualizar frame actual
   updateCurrentFrame()
 
-  // Detectar movimiento si tenemos frame anterior
-  if (prevFrame) {
+  // Solo detectar movimiento después de unos frames iniciales y si tenemos frame anterior
+  if (prevFrame && frameCount > minFramesBeforeDetection) {
     detectMotion()
-    drawMotionGrid()
+    revealImageSegments() // Nueva función para revelar segmentos
+  } else if (frameCount <= minFramesBeforeDetection) {
+    // Mostrar mensaje de calibración
+    fill(255, 255, 0, 200)
+    noStroke()
+    rect(width / 2 - 100, height - 40, 200, 30)
+
+    fill(0)
+    textAlign(CENTER, CENTER)
+    textSize(12)
+    let remainingFrames = minFramesBeforeDetection - frameCount
+    text(
+      `Calibrando cámara... ${Math.ceil(remainingFrames / 30)}s`,
+      width / 2,
+      height - 25
+    )
+  } else {
+    // Solo mostrar la grilla sin detección
+    drawGrid()
   }
 
   // Actualizar frame anterior
@@ -80,7 +178,7 @@ function initializeFrames () {
   // Crear buffers para los frames con las dimensiones exactas del canvas
   prevFrame = createGraphics(width, height)
   currentFrame = createGraphics(width, height)
-  
+
   // Configurar los gráficos para pixelDensity consistente
   prevFrame.pixelDensity(1)
   currentFrame.pixelDensity(1)
@@ -111,6 +209,11 @@ function detectMotion () {
   prevFrame.loadPixels()
   currentFrame.loadPixels()
 
+  // Verificar que ambos frames tienen datos válidos
+  if (prevFrame.pixels.length === 0 || currentFrame.pixels.length === 0) {
+    return
+  }
+
   // Reinicializar grilla de movimiento
   for (let i = 0; i < gridCols; i++) {
     if (!motionGrid[i]) motionGrid[i] = []
@@ -124,6 +227,11 @@ function detectMotion () {
     for (let gridY = 0; gridY < gridRows; gridY++) {
       let motionDetected = analyzeGridCell(gridX, gridY)
       motionGrid[gridX][gridY] = motionDetected
+
+      // Si hay movimiento, marcar la celda como revelada permanentemente
+      if (motionDetected) {
+        revealedCells[gridX][gridY] = true
+      }
     }
   }
 }
@@ -146,7 +254,10 @@ function analyzeGridCell (gridX, gridY) {
         let index = (y * width + x) * 4
 
         // Verificar que el índice esté dentro del rango
-        if (index < prevFrame.pixels.length - 3 && index < currentFrame.pixels.length - 3) {
+        if (
+          index < prevFrame.pixels.length - 3 &&
+          index < currentFrame.pixels.length - 3
+        ) {
           // Obtener valores RGB del frame anterior
           let prevR = prevFrame.pixels[index]
           let prevG = prevFrame.pixels[index + 1]
@@ -179,48 +290,85 @@ function analyzeGridCell (gridX, gridY) {
   return avgDifference > threshold
 }
 
-function drawMotionGrid () {
-  // Dibujar celdas con movimiento
-  fill(255, 0, 0, overlayOpacity) // Rojo semi-transparente
-  noStroke()
-
+function revealImageSegments () {
+  // Dibujar los segmentos de imagen revelados permanentemente
   for (let gridX = 0; gridX < gridCols; gridX++) {
     for (let gridY = 0; gridY < gridRows; gridY++) {
-      if (motionGrid[gridX] && motionGrid[gridX][gridY]) {
-        let x = gridOffsetX + gridX * cellWidth
-        let y = gridOffsetY + gridY * cellHeight
-        rect(x, y, cellWidth, cellHeight)
+      if (revealedCells[gridX] && revealedCells[gridX][gridY]) {
+        // Calcular posiciones en el canvas (donde se dibuja)
+        let canvasX = gridOffsetX + gridX * cellWidth
+        let canvasY = gridOffsetY + gridY * cellHeight
+
+        // Calcular coordenadas de origen en la imagen original
+        // Cada celda debe mostrar solo su porción correspondiente
+        let imgSourceX = gridX * cellWidth
+        let imgSourceY = gridY * cellHeight
+
+        // Dibujar solo el segmento específico de la imagen
+        image(
+          gazaImage,
+          canvasX,
+          canvasY,
+          cellWidth,
+          cellHeight, // destino en canvas
+          imgSourceX,
+          imgSourceY,
+          cellWidth,
+          cellHeight
+        ) // porción específica de la imagen original
       }
     }
   }
 
-  // Dibujar grilla (opcional)
+  // Dibujar grilla opcional para debug (se puede quitar)
   drawGrid()
 }
 
-function drawGrid () {
-  stroke(255, 255, 255, 100) // Líneas blancas semi-transparentes más visibles
-  strokeWeight(2)
+function drawMotionGrid () {
+  // Esta función ya no se usa - la funcionalidad está en revealImageSegments()
+  // Mantenida para compatibilidad
+}
 
-  // Líneas verticales (separando columnas)
-  for (let i = 0; i <= gridCols; i++) {
-    let x = gridOffsetX + i * cellWidth
-    line(x, gridOffsetY, x, gridOffsetY + gridHeight)
+function drawGrid () {
+  stroke(255, 255, 255, 50) // Líneas blancas muy sutiles
+  strokeWeight(1)
+
+  // Solo dibujar la grilla si no todas las celdas están reveladas
+  let allRevealed = true
+  for (let i = 0; i < gridCols && allRevealed; i++) {
+    for (let j = 0; j < gridRows && allRevealed; j++) {
+      if (!revealedCells[i] || !revealedCells[i][j]) {
+        allRevealed = false
+      }
+    }
   }
 
-  // Líneas horizontales (separando filas)
-  for (let j = 0; j <= gridRows; j++) {
-    let y = gridOffsetY + j * cellHeight
-    line(gridOffsetX, y, gridOffsetX + gridWidth, y)
+  // Si no todas las celdas están reveladas, mostrar grilla sutil
+  if (!allRevealed) {
+    // Líneas verticales (separando columnas)
+    for (let i = 0; i <= gridCols; i++) {
+      let x = gridOffsetX + i * cellWidth
+      line(x, gridOffsetY, x, gridOffsetY + gridHeight)
+    }
+
+    // Líneas horizontales (separando filas)
+    for (let j = 0; j <= gridRows; j++) {
+      let y = gridOffsetY + j * cellHeight
+      line(gridOffsetX, y, gridOffsetX + gridWidth, y)
+    }
   }
 }
 
 function initializeMotionGrid () {
   motionGrid = []
+  revealedCells = []
+
   for (let i = 0; i < gridCols; i++) {
     motionGrid[i] = []
+    revealedCells[i] = []
     for (let j = 0; j < gridRows; j++) {
       motionGrid[i][j] = false
+      revealedCells[i][j] = false
     }
   }
 }
@@ -263,19 +411,36 @@ function drawInfo () {
   // Mostrar FPS y información de depuración
   fill(255, 255, 255, 200)
   noStroke()
-  rect(10, 10, 220, 100)
+  rect(10, 10, 280, 140)
 
   fill(0)
   textAlign(LEFT)
   textSize(12)
   text(`FPS: ${Math.round(frameRate())}`, 20, 25)
-  text(`Umbral: ${threshold}`, 20, 40)
-  text(`Grilla: ${gridCols}x${gridRows} (${gridWidth}x${gridHeight}px)`, 20, 55)
-  text(`Celda: ${cellWidth}x${cellHeight}px`, 20, 70)
-  text(`Video: ${isVideoReady ? 'Activo' : 'Cargando...'}`, 20, 85)
+  text(`Frames: ${frameCount}`, 20, 40)
+  text(`Umbral: ${threshold}`, 20, 55)
+  text(`Grilla: ${gridCols}x${gridRows} (${gridWidth}x${gridHeight}px)`, 20, 70)
+  text(`Celda: ${Math.round(cellWidth)}x${Math.round(cellHeight)}px`, 20, 85)
+  text(`Video: ${isVideoReady ? 'Activo' : 'Cargando...'}`, 20, 100)
+  text(`Imagen: ${imageLoaded ? 'Cargada' : 'Cargando...'}`, 20, 115)
 
-  // Contar celdas con movimiento
+  // Estado de detección
+  let detectionStatus =
+    frameCount > minFramesBeforeDetection ? 'Activa' : 'Calibrando...'
+  text(`Detección: ${detectionStatus}`, 20, 130)
+
+  // Contar celdas reveladas
+  let revealedCount = 0
   let motionCells = 0
+
+  for (let i = 0; i < revealedCells.length; i++) {
+    if (revealedCells[i]) {
+      for (let j = 0; j < revealedCells[i].length; j++) {
+        if (revealedCells[i][j]) revealedCount++
+      }
+    }
+  }
+
   for (let i = 0; i < motionGrid.length; i++) {
     if (motionGrid[i]) {
       for (let j = 0; j < motionGrid[i].length; j++) {
@@ -283,7 +448,16 @@ function drawInfo () {
       }
     }
   }
-  text(`Movimiento: ${motionCells} celdas`, 20, 100)
+
+  text(`Reveladas: ${revealedCount}/${gridCols * gridRows} celdas`, 20, 145)
+
+  // Mostrar mensaje de completado
+  if (revealedCount === gridCols * gridRows) {
+    fill(0, 150, 0)
+    textSize(14)
+    textAlign(CENTER)
+    text('¡Imagen completa revelada!', width / 2, height - 20)
+  }
 }
 
 // Función para manejar errores de video
@@ -301,4 +475,34 @@ function videoError (err) {
 function windowResized () {
   // Mantener el tamaño fijo para consistencia
   // resizeCanvas(windowWidth, windowHeight);
+}
+
+// Función para resetear las celdas reveladas (opcional)
+function keyPressed () {
+  if (key === 'r' || key === 'R') {
+    // Reset: limpiar todas las celdas reveladas
+    for (let i = 0; i < gridCols; i++) {
+      for (let j = 0; j < gridRows; j++) {
+        if (revealedCells[i]) {
+          revealedCells[i][j] = false
+        }
+      }
+    }
+
+    // No resetear frameCount para evitar detección falsa inmediata
+    console.log('Imagen reseteada - presiona R para resetear')
+  }
+
+  if (key === 'c' || key === 'C') {
+    // Comando oculto: resetear todo incluyendo calibración
+    frameCount = 0
+    for (let i = 0; i < gridCols; i++) {
+      for (let j = 0; j < gridRows; j++) {
+        if (revealedCells[i]) {
+          revealedCells[i][j] = false
+        }
+      }
+    }
+    console.log('Reset completo - recalibrando...')
+  }
 }
