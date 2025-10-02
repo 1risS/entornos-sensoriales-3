@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gaza 2023-2025 - Instalación</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background-color: #000;
+        font-family: Arial, sans-serif;
+      }
+
+      /* Ocultar cualquier elemento de UI */
+      .hidden {
+        display: none !important;
+      }
+
+      /* Instrucciones iniciales (se ocultan automáticamente) */
+      #instructions {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        color: white;
+        text-align: center;
+        z-index: 2000;
+        background: rgba(0, 0, 0, 0.8);
+        padding: 20px;
+        border-radius: 10px;
+        font-size: 18px;
+        line-height: 1.5;
+      }
+
+      #instructions.fade-out {
+        opacity: 0;
+        transition: opacity 2s ease-out;
+      }
+
+      /* Controles ocultos para debug */
+      #debug-info {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        color: white;
+        font-size: 12px;
+        background: rgba(0, 0, 0, 0.5);
+        padding: 10px;
+        border-radius: 5px;
+        font-family: monospace;
+        display: none;
+        z-index: 1500;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Instrucciones iniciales -->
+    <div id="instructions">
+      <h2>Gaza 2023-2025</h2>
+      <p>Instalación interactiva</p>
+      <br />
+      <p>Muévete frente a la cámara para revelar la imagen</p>
+      <p><small>Presiona F para pantalla completa</small></p>
+      <p><small>Presiona R para reiniciar</small></p>
+    </div>
+
+    <!-- Panel de debug (oculto por defecto) -->
+    <div id="debug-info">
+      <div>FPS: <span id="fps">--</span></div>
+      <div>
+        Reveladas: <span id="revealed">0</span>/<span id="total">12</span>
+      </div>
+      <div>Estado: <span id="status">Iniciando...</span></div>
+      <div><small>Presiona I para toggle debug</small></div>
+    </div>
+
+    <script src="sketch_instalacion.js"></script>
+
+    <script>
+      // Ocultar instrucciones después de 8 segundos
+      setTimeout(() => {
+        const instructions = document.getElementById('instructions')
+        if (instructions) {
+          instructions.classList.add('fade-out')
+          setTimeout(() => {
+            instructions.style.display = 'none'
+          }, 2000)
+        }
+      }, 8000)
+
+      // Debug toggle
+      let debugVisible = false
+      document.addEventListener('keydown', e => {
+        if (e.key.toLowerCase() === 'i') {
+          debugVisible = !debugVisible
+          const debugPanel = document.getElementById('debug-info')
+          if (debugPanel) {
+            debugPanel.style.display = debugVisible ? 'block' : 'none'
+          }
+        }
+
+        // ESC para salir de fullscreen
+        if (e.key === 'Escape') {
+          if (document.fullscreenElement) {
+            document.exitFullscreen()
+          }
+        }
+      })
+
+      // Actualizar info de debug cada segundo
+      setInterval(() => {
+        if (debugVisible && typeof frameRate !== 'undefined') {
+          const fpsEl = document.getElementById('fps')
+          const revealedEl = document.getElementById('revealed')
+          const statusEl = document.getElementById('status')
+
+          if (fpsEl) fpsEl.textContent = Math.round(frameRate())
+
+          // Esta información se actualizará desde sketch_instalacion.js
+          if (typeof getInstallationStatus === 'function') {
+            const status = getInstallationStatus()
+            if (revealedEl) revealedEl.textContent = status.revealed
+            if (statusEl) statusEl.textContent = status.status
+          }
+        }
+      }, 1000)
+
+      // Deshabilitar menú contextual
+      document.addEventListener('contextmenu', e => e.preventDefault())
+
+      // Deshabilitar selección de texto
+      document.addEventListener('selectstart', e => e.preventDefault())
+
+      // Auto fullscreen al hacer click (opcional)
+      document.addEventListener(
+        'click',
+        () => {
+          if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen()
+          }
+        },
+        { once: true }
+      )
+    </script>
+  </body>
+</html>

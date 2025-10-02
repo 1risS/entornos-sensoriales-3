@@ -3,6 +3,7 @@ let prevFrame
 let currentFrame
 let motionGrid = []
 let revealedCells = [] // Para mantener registro de qué celdas han sido reveladas
+let cellBrightness = [] // Para almacenar el brillo promedio de cada celda
 let gazaImage // Imagen que se revelará con el movimiento
 let gridCols = 2 // 2 columnas
 let gridRows = 3 // 3 filas
@@ -18,6 +19,11 @@ let isVideoReady = false
 let imageLoaded = false
 let frameCount = 0 // Contador de frames para evitar detección temprana
 let minFramesBeforeDetection = 30 // Esperar 30 frames antes de empezar a detectar
+
+// Variables para OSC
+let oscEnabled = true // Activar/desactivar OSC
+let oscAddress = "/gaza/cell" // Dirección base OSC
+let oscPort = 7000 // Puerto OSC (configurable)
 
 // Variables para controles
 let thresholdSlider, opacitySlider
@@ -80,6 +86,9 @@ function preload () {
       )
       console.log('- Grilla:', gridCols, 'columnas x', gridRows, 'filas')
 
+      // Calcular brillo promedio de cada celda para OSC
+      calculateCellBrightness()
+
       imageLoaded = true
     },
     err => {
@@ -137,8 +146,11 @@ function draw () {
   // Incrementar contador de frames
   frameCount++
 
-  // Mostrar el video actual
-  image(video, 0, 0, width, height)
+  // Mostrar el video actual (flippeado horizontalmente como espejo)
+  push()
+  scale(-1, 1) // Invertir horizontalmente
+  image(video, -width, 0, width, height)
+  pop()
 
   // Actualizar frame actual
   updateCurrentFrame()
@@ -189,8 +201,11 @@ function initializeFrames () {
 function updateCurrentFrame () {
   if (!currentFrame) return
 
-  // Capturar frame actual - asegurar que coincida exactamente con las dimensiones del canvas
-  currentFrame.image(video, 0, 0, width, height)
+  // Capturar frame actual flippeado para coincidir con la visualización
+  currentFrame.push()
+  currentFrame.scale(-1, 1) // Invertir horizontalmente
+  currentFrame.image(video, -width, 0, width, height)
+  currentFrame.pop()
   currentFrame.loadPixels()
 }
 
@@ -228,9 +243,14 @@ function detectMotion () {
       let motionDetected = analyzeGridCell(gridX, gridY)
       motionGrid[gridX][gridY] = motionDetected
 
-      // Si hay movimiento, marcar la celda como revelada permanentemente
-      if (motionDetected) {
+      // Si hay movimiento y la celda no estaba revelada antes
+      if (motionDetected && !revealedCells[gridX][gridY]) {
         revealedCells[gridX][gridY] = true
+        
+        // Enviar mensaje OSC con el brillo de la celda
+        if (cellBrightness[gridX] && cellBrightness[gridX][gridY] !== undefined) {
+          sendOSCMessage(gridX, gridY, cellBrightness[gridX][gridY])
+        }
       }
     }
   }
@@ -288,6 +308,96 @@ function analyzeGridCell (gridX, gridY) {
 
   // Retornar true si supera el umbral
   return avgDifference > threshold
+}
+
+function calculateCellBrightness() {
+  console.log('Calculando brillo promedio por celda...')
+  
+  // Inicializar array de brillo
+  cellBrightness = []
+  for (let i = 0; i < gridCols; i++) {
+    cellBrightness[i] = []
+  }
+  
+  // Cargar pixels de la imagen
+  gazaImage.loadPixels()
+  
+  // Calcular brillo para cada celda
+  for (let gridX = 0; gridX < gridCols; gridX++) {
+    for (let gridY = 0; gridY < gridRows; gridY++) {
+      let brightness = calculateCellAverageBrightness(gridX, gridY)
+      cellBrightness[gridX][gridY] = brightness
+      
+      console.log(`Celda [${gridX}][${gridY}]: brillo ${brightness.toFixed(2)}`)
+    }
+  }
+  
+  console.log('✓ Análisis de brillo completado')
+}
+
+function calculateCellAverageBrightness(gridX, gridY) {
+  // Calcular coordenadas en la imagen original
+  let imgStartX = Math.floor((gridX / gridCols) * gazaImage.width)
+  let imgStartY = Math.floor((gridY / gridRows) * gazaImage.height)
+  let imgEndX = Math.floor(((gridX + 1) / gridCols) * gazaImage.width)
+  let imgEndY = Math.floor(((gridY + 1) / gridRows) * gazaImage.height)
+  
+  let totalBrightness = 0
+  let pixelCount = 0
+  
+  // Muestrear cada 4 píxeles para eficiencia
+  for (let x = imgStartX; x < imgEndX; x += 4) {
+    for (let y = imgStartY; y < imgEndY; y += 4) {
+      if (x >= 0 && x < gazaImage.width && y >= 0 && y < gazaImage.height) {
+        let index = (y * gazaImage.width + x) * 4
+        
+        if (index < gazaImage.pixels.length - 3) {
+          let r = gazaImage.pixels[index]
+          let g = gazaImage.pixels[index + 1]
+          let b = gazaImage.pixels[index + 2]
+          
+          // Calcular luminancia (brillo percibido)
+          let brightness = (r * 0.299 + g * 0.587 + b * 0.114) / 255
+          totalBrightness += brightness
+          pixelCount++
+        }
+      }
+    }
+  }
+  
+  return pixelCount > 0 ? totalBrightness / pixelCount : 0
+}
+
+function sendOSCMessage(gridX, gridY, brightness) {
+  if (!oscEnabled) return
+  
+  // Crear mensaje OSC
+  let oscMessage = {
+    address: `${oscAddress}/${gridX}/${gridY}`,
+    args: [
+      { type: 'i', value: gridX },        // Columna (int)
+      { type: 'i', value: gridY },        // Fila (int)
+      { type: 'f', value: brightness },   // Brillo (float 0-1)
+      { type: 'i', value: Date.now() }    // Timestamp (int)
+    ]
+  }
+  
+  // Log para debug
+  console.log(`OSC → ${oscMessage.address}: col=${gridX}, row=${gridY}, brightness=${brightness.toFixed(3)}`)
+  
+  // Aquí se enviaría el mensaje OSC real
+  // Por ahora solo hacemos log, pero se puede integrar con una librería OSC
+  simulateOSCSend(oscMessage)
+}
+
+function simulateOSCSend(oscMessage) {
+  // Simulación de envío OSC - en producción se reemplazaría con librería real
+  // Por ejemplo: osc.send(oscMessage, oscPort, 'localhost')
+  
+  // Para debug: mostrar en consola lo que se enviaría
+  if (frameCount % 30 === 0) { // Solo mostrar algunos mensajes para no spam
+    console.log(`[OSC SIMULADO] ${oscMessage.address}:`, oscMessage.args.map(arg => arg.value))
+  }
 }
 
 function revealImageSegments () {
